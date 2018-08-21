@@ -30,7 +30,8 @@ use the `from_filename` and `from_path` methods provided by the crate.
 
 `dotenv_codegen` provides the `dotenv!` macro, which
 behaves identically to `env!`, but first tries to load a `.env` file at compile
-time.
+time. This macro does autoloads the `.env` file and cannot be configured to use
+another config file.
 
 Examples
 ----
@@ -66,8 +67,8 @@ fn main() {
 Using the `dotenv!` macro
 ------------------------------------
 
-Add `dotenv_codegen` to your dependencies, and add the following to the top of
-your crate:
+Add `dotenv_codegen` to your dependencies, ensure to have an `.env` file
+and add the following to the top of your crate:
 
 ```rust
 #[macro_use]
