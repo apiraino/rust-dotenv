@@ -59,6 +59,13 @@ fn named_string(captures: &Captures, name: &str) -> Option<String> {
         .and_then(|v| Some(v.as_str().to_owned()))
 }
 
+#[derive(Eq, PartialEq)]
+enum SubstitutionMode {
+    None,
+    Block,
+    EscapedBlock,
+}
+
 fn parse_value(input: &str, line_number: i32, substitution_data: &mut HashMap<String, Option<String>>) -> Result<String> {
     let mut strong_quote = false; // '
     let mut weak_quote = false; // "
@@ -68,9 +75,8 @@ fn parse_value(input: &str, line_number: i32, substitution_data: &mut HashMap<St
     //FIXME can this be done without yet another allocation per line?
     let mut output = String::new();
 
-    let mut in_expansion_block = false;
-    let mut in_expansion_parenthesis = false;
-    let mut expansion_name = String::new();
+    let mut substitution_mode = SubstitutionMode::None;
+    let mut substitution_name = String::new();
 
     for c in input.chars() {
         //the regex _should_ already trim whitespace off the end
@@ -104,28 +110,44 @@ fn parse_value(input: &str, line_number: i32, substitution_data: &mut HashMap<St
             } else {
                 output.push(c);
             }
-        } else if in_expansion_block && c == '{' {
-            in_expansion_parenthesis = true;
-        } else if in_expansion_parenthesis && c == '}' {
-            in_expansion_parenthesis = false;
-            in_expansion_block = false;
-            apply_expansion(substitution_data, &expansion_name, &mut output);
-            expansion_name.clear();
-        } else if c == '$' {
-            if in_expansion_block {
-                apply_expansion(substitution_data, &expansion_name, &mut output);
-                expansion_name.clear();
+        } else if substitution_mode != SubstitutionMode::None {
+            if c.is_alphanumeric() {
+                substitution_name.push(c);
             } else {
-                in_expansion_block = !strong_quote && !escaped;
+                match substitution_mode {
+                    SubstitutionMode::None => panic!("Impossible match branch due to enclosing if condition"),
+                    SubstitutionMode::Block => {
+                        if c == '{' && substitution_name.is_empty() {
+                            substitution_mode = SubstitutionMode::EscapedBlock;
+                        } else {
+                            apply_substitution(substitution_data, &substitution_name.drain(..).collect::<String>(), &mut output);
+                            if c == '$' {
+                                substitution_mode = if !strong_quote && !escaped {
+                                    SubstitutionMode::Block
+                                } else {
+                                    SubstitutionMode::None
+                                }
+                            } else {
+                                substitution_mode = SubstitutionMode::None;
+                                output.push(c);
+                            }
+                        }
+                    },
+                    SubstitutionMode::EscapedBlock => {
+                        if c == '}' {
+                            substitution_mode = SubstitutionMode::None;
+                            apply_substitution(substitution_data, &substitution_name.drain(..).collect::<String>(), &mut output);
+                        } else {
+                            substitution_name.push(c);
+                        }
+                    },
+                }
             }
-        } else if in_expansion_block {
-            if !in_expansion_parenthesis && !c.is_alphanumeric() {
-                in_expansion_block = false;
-                apply_expansion(substitution_data, &expansion_name, &mut output);
-                expansion_name = String::new();
-                output.push(c);
+        } else if c == '$' {
+            substitution_mode = if !strong_quote && !escaped {
+                SubstitutionMode::Block
             } else {
-                expansion_name.push(c);
+                SubstitutionMode::None
             }
         } else if weak_quote {
             if c == '"' {
@@ -148,27 +170,20 @@ fn parse_value(input: &str, line_number: i32, substitution_data: &mut HashMap<St
         }
     }
 
-    if in_expansion_block {
-        if in_expansion_parenthesis {
-            return Err(Error::LineParse(input.to_owned(), line_number));
-        } else {
-            apply_expansion(substitution_data, &expansion_name, &mut output);
-        }
-    }
-
     //XXX also fail if escaped? or...
-    if strong_quote || weak_quote {
+    if substitution_mode == SubstitutionMode::EscapedBlock || strong_quote || weak_quote {
         Err(Error::LineParse(input.to_owned(), line_number))
     } else {
+        apply_substitution(substitution_data, &substitution_name.drain(..).collect::<String>(), &mut output);
         Ok(output)
     }
 }
 
-fn apply_expansion(expansion_data: &mut HashMap<String, Option<String>>, expansion_name: &str, output: &mut String) {
-    if let Ok(environment_value) = std::env::var(expansion_name) {
+fn apply_substitution(substitution_data: &mut HashMap<String, Option<String>>, substitution_name: &str, output: &mut String) {
+    if let Ok(environment_value) = std::env::var(substitution_name) {
         output.push_str(&environment_value);
     } else {
-        let stored_value = expansion_data.get(expansion_name).unwrap_or(&None).to_owned();
+        let stored_value = substitution_data.get(substitution_name).unwrap_or(&None).to_owned();
         output.push_str(&stored_value.unwrap_or_else(String::new));
     };
 }
@@ -311,8 +326,9 @@ KEY4=please stop
 }
 
 #[cfg(test)]
-mod variable_expansion_tests {
+mod variable_substitution_tests {
     use crate::iter::Iter;
+    use crate::errors::Error::LineParse;
 
     fn assert_parsed_string(input_string: &str, expected_parse_result: Vec<(&str, &str)>) {
         let actual_iter = Iter::new(input_string.as_bytes());
@@ -386,6 +402,20 @@ mod variable_expansion_tests {
     }
 
     #[test]
+    fn same_variable_reused() {
+        assert_parsed_string(
+            r#"
+    KEY=VALUE
+    KEY1=$KEY$KEY
+    "#,
+            vec![
+                ("KEY", "VALUE"),
+                ("KEY1", "VALUEVALUE"),
+            ],
+        );
+    }
+
+    #[test]
     fn recursive_substitution() {
         assert_parsed_string(
             r#"
@@ -405,12 +435,12 @@ mod variable_expansion_tests {
             r#"
             KEY1=test_user
             KEY1_1=test_user_with_separator
-            KEY=">$KEY1_1<"
+            KEY=">$KEY1_1<>$KEY1}<>$KEY1{<"
             "#,
             vec![
                 ("KEY1", "test_user"),
                 ("KEY1_1", "test_user_with_separator"),
-                ("KEY", ">test_user_1<"),
+                ("KEY", ">test_user_1<>test_user}<>test_user{<"),
             ],
         );
     }
@@ -471,5 +501,27 @@ mod variable_expansion_tests {
                 ("KEY", "><>_2<"),
             ],
         );
+    }
+
+    #[test]
+    fn should_not_parse_unfinished_substitutions() {
+        let parsed_values: Vec<_> = Iter::new(r#"
+    KEY=VALUE
+    KEY1=>${KEY{<
+    "#.as_bytes()).collect();
+
+        assert_eq!(parsed_values.len(), 2);
+
+        if let Ok(first_line) = &parsed_values[0] {
+            assert_eq!(first_line, &(String::from("KEY"), String::from("VALUE")))
+        } else {
+            assert!(false, "Expected the first value to be parsed")
+        }
+
+        if let Err(LineParse(second_value, _)) = &parsed_values[1] {
+            assert_eq!(second_value, &String::from(">${KEY{<"))
+        } else {
+            assert!(false, "Expected the second value not to be parsed")
+        }
     }
 }
