@@ -7,7 +7,7 @@ use crate::errors::*;
 // for readability's sake
 pub type ParsedLine = Result<Option<(String, String)>>;
 
-pub fn parse_line(line: &str, line_number: i32, mut substitution_data: &mut HashMap<String, Option<String>>) -> ParsedLine {
+pub fn parse_line(line: &str, line_number: u32, mut substitution_data: &mut HashMap<String, Option<String>>) -> ParsedLine {
     lazy_static! {
       static ref LINE_REGEX: Regex = Regex::new(r#"(?x)
         ^(
@@ -28,7 +28,7 @@ pub fn parse_line(line: &str, line_number: i32, mut substitution_data: &mut Hash
 
     LINE_REGEX
         .captures(line)
-        .map_or(Err(Error::LineParse(line.into(), line_number)), |captures| {
+        .map_or(Err(Error::LineParse(line.into(), line_number, 1)), |captures| {
             let key = named_string(&captures, "key");
             let value = named_string(&captures, "value");
 
@@ -66,7 +66,7 @@ enum SubstitutionMode {
     EscapedBlock,
 }
 
-fn parse_value(input: &str, line_number: i32, substitution_data: &mut HashMap<String, Option<String>>) -> Result<String> {
+fn parse_value(input: &str, line_number: u32, substitution_data: &mut HashMap<String, Option<String>>) -> Result<String> {
     let mut strong_quote = false; // '
     let mut weak_quote = false; // "
     let mut escaped = false;
@@ -78,7 +78,7 @@ fn parse_value(input: &str, line_number: i32, substitution_data: &mut HashMap<St
     let mut substitution_mode = SubstitutionMode::None;
     let mut substitution_name = String::new();
 
-    for c in input.chars() {
+    for (column_index, c) in input.chars().enumerate() {
         //the regex _should_ already trim whitespace off the end
         //expecting_end is meant to permit: k=v #comment
         //without affecting: k=v#comment
@@ -89,7 +89,7 @@ fn parse_value(input: &str, line_number: i32, substitution_data: &mut HashMap<St
             } else if c == '#' {
                 break;
             } else {
-                return Err(Error::LineParse(input.to_owned(), line_number));
+                return Err(Error::LineParse(input.to_owned(), line_number, column_index + 1));
             }
         } else if escaped {
             //TODO I tried handling literal \n \r but various issues
@@ -99,7 +99,7 @@ fn parse_value(input: &str, line_number: i32, substitution_data: &mut HashMap<St
             match c {
                 '\\' | '\'' | '"' | '$' | ' ' => output.push(c),
                 _ => {
-                    return Err(Error::LineParse(input.to_owned(), line_number));
+                    return Err(Error::LineParse(input.to_owned(), line_number, column_index + 1));
                 }
             }
 
@@ -172,7 +172,7 @@ fn parse_value(input: &str, line_number: i32, substitution_data: &mut HashMap<St
 
     //XXX also fail if escaped? or...
     if substitution_mode == SubstitutionMode::EscapedBlock || strong_quote || weak_quote {
-        Err(Error::LineParse(input.to_owned(), line_number))
+        Err(Error::LineParse(input.to_owned(), line_number, input.len()))
     } else {
         apply_substitution(substitution_data, &substitution_name.drain(..).collect::<String>(), &mut output);
         Ok(output)
@@ -315,10 +315,13 @@ KEY4=please stop
         ];
 
         for (index, actual) in actual_iter.enumerate() {
-            let line_number = index + 1;
-
             match actual {
-                Err(e) => assert_eq!(format!("Error parsing line {:?}: {}", line_number, values[index]), e.to_string()),
+                Err(e) => {
+                    let expected_string = values[index];
+                    let line_number = index + 1;
+                    let column_number = expected_string.find(" ").expect("Parser errors should happen on first whitespace") + 1;
+                    assert_eq!(format!("Error parsing line {} column {}: {}", line_number, column_number, expected_string), e.to_string())
+                }
                 _ => assert!(true),
             }
         }
@@ -505,10 +508,9 @@ mod variable_substitution_tests {
 
     #[test]
     fn should_not_parse_unfinished_substitutions() {
-        let parsed_values: Vec<_> = Iter::new(r#"
-    KEY=VALUE
-    KEY1=>${KEY{<
-    "#.as_bytes()).collect();
+        let incorrect_value = ">${KEY{<";
+        let parsed_values: Vec<_> = Iter::new(format!(r#"KEY=VALUE
+KEY1={}"#, incorrect_value).as_bytes()).collect();
 
         assert_eq!(parsed_values.len(), 2);
 
@@ -518,8 +520,10 @@ mod variable_substitution_tests {
             assert!(false, "Expected the first value to be parsed")
         }
 
-        if let Err(LineParse(second_value, _)) = &parsed_values[1] {
-            assert_eq!(second_value, &String::from(">${KEY{<"))
+        if let Err(LineParse(second_value, line_number, column_number)) = &parsed_values[1] {
+            assert_eq!(line_number, &2);
+            assert_eq!(column_number, &incorrect_value.len());
+            assert_eq!(second_value, &String::from(incorrect_value));
         } else {
             assert!(false, "Expected the second value not to be parsed")
         }

@@ -2,8 +2,8 @@ use std::io;
 
 #[derive(Debug, Fail)]
 pub enum Error {
-    #[fail(display = "Error parsing line {}: '{}'", _1, _0)]
-    LineParse(String, i32),
+    #[fail(display = "Error parsing line {} column {}: '{}'", _1, _2, _0)]
+    LineParse(String, u32, usize),
     #[fail(display = "{}", _0)]
     Io(#[cfg_attr(backtrace, cause)] ::std::io::Error),
     #[fail(display = "{}", _0)]

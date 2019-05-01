@@ -8,7 +8,7 @@ use crate::parse;
 
 pub struct Iter<R> {
     lines: Lines<BufReader<R>>,
-    current_line: i32,
+    current_line: u32,
     substitution_data: HashMap<String, Option<String>>,
 }
 
