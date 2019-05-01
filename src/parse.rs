@@ -508,10 +508,9 @@ mod variable_substitution_tests {
 
     #[test]
     fn should_not_parse_unfinished_substitutions() {
-        let parsed_values: Vec<_> = Iter::new(r#"
-    KEY=VALUE
-    KEY1=>${KEY{<
-    "#.as_bytes()).collect();
+        let incorrect_value = ">${KEY{<";
+        let parsed_values: Vec<_> = Iter::new(format!(r#"KEY=VALUE
+KEY1={}"#, incorrect_value).as_bytes()).collect();
 
         assert_eq!(parsed_values.len(), 2);
 
@@ -521,8 +520,10 @@ mod variable_substitution_tests {
             assert!(false, "Expected the first value to be parsed")
         }
 
-        if let Err(LineParse(second_value, _, _)) = &parsed_values[1] {
-            assert_eq!(second_value, &String::from(">${KEY{<"))
+        if let Err(LineParse(second_value, line_number, column_number)) = &parsed_values[1] {
+            assert_eq!(line_number, &2);
+            assert_eq!(column_number, &incorrect_value.len());
+            assert_eq!(second_value, &String::from(incorrect_value));
         } else {
             assert!(false, "Expected the second value not to be parsed")
         }
