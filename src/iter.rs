@@ -1,6 +1,7 @@
-use std::io::prelude::*;
-use std::io::{BufReader, Lines};
+use std::collections::HashMap;
 use std::env;
+use std::io::{BufReader, Lines};
+use std::io::prelude::*;
 
 use crate::errors::*;
 use crate::parse;
@@ -8,6 +9,7 @@ use crate::parse;
 pub struct Iter<R> {
     lines: Lines<BufReader<R>>,
     current_line: i32,
+    substitution_data: HashMap<String, Option<String>>,
 }
 
 impl<R: Read> Iter<R> {
@@ -15,6 +17,7 @@ impl<R: Read> Iter<R> {
         Iter {
             lines: BufReader::new(reader).lines(),
             current_line: 0,
+            substitution_data: HashMap::new(),
         }
     }
 
@@ -43,7 +46,7 @@ impl<R: Read> Iterator for Iter<R> {
                 None => return None,
             };
 
-            match parse::parse_line(&line, self.current_line) {
+            match parse::parse_line(&line, self.current_line, &mut self.substitution_data) {
                 Ok(Some(result)) => return Some(Ok(result)),
                 Ok(None) => {}
                 Err(err) => return Some(Err(err)),
