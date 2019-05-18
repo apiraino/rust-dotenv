@@ -1,6 +1,9 @@
 rust-dotenv [![Build Status](https://travis-ci.org/apiraino/rust-dotenv.svg?branch=master)](https://travis-ci.org/apiraino/rust-dotenv)
 ====
 
+### **This fork is archived, development will continue on the (official) [repository](https://github.com/dotenv-rs/dotenv)** 
+(please contribute there issue and pull requests)
+
 **Achtung!** This is a v0.\* version! Expect bugs and issues all around.
 Submitting pull requests and issues is highly encouraged!
 
